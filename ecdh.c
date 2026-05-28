@@ -29,11 +29,11 @@
  * h: 1
  */
 #define p "115792089210356248762697446949407573530086143415290314195533631308867097853951"
-#define a 115792089210356248762697446949407573530086143415290314195533631308867097853948
-#define b 41058363725152142129326129780047268409114441015993725554835256314039467401291
-#define Gx 48439561293906451759052585252797914202762949526041747995844080717082404635286
-#define Gy 36134250956749795798585127919587881956611106672985015071877198253568414405109
-#define n 115792089210356248762697446949407573529996955224135760342422259061068512044369
+#define a "115792089210356248762697446949407573530086143415290314195533631308867097853948"
+#define b "41058363725152142129326129780047268409114441015993725554835256314039467401291"
+#define Gx "48439561293906451759052585252797914202762949526041747995844080717082404635286"
+#define Gy "36134250956749795798585127919587881956611106672985015071877198253568414405109"
+#define n "115792089210356248762697446949407573529996955224135760342422259061068512044369"
 #define h 1
 
 /*
@@ -60,16 +60,58 @@ int main() {
 
     // bignum stuff
     BIGNUM *bn_p = BN_new();
+    BIGNUM *bn_a = BN_new();
+    BIGNUM *bn_b = BN_new();
+    BIGNUM *bn_Gx = BN_new();
+    BIGNUM *bn_Gy = BN_new();
+    BIGNUM *bn_n = BN_new();
+    // did we say we did not have to do one for h?
     
     //BN_dec2bn(&bn_p, str_num);
     BN_dec2bn(&bn_p, p);
+    BN_dec2bn(&bn_a, a);
+    BN_dec2bn(&bn_b, b);
+    BN_dec2bn(&bn_Gx, Gx);
+    BN_dec2bn(&bn_Gy, Gy);
+    BN_dec2bn(&bn_n, n);
+
 
     if (BN_print_fp(stdout, bn_p) == 0) {
         fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
     fprintf(stdout, "\n");
+    if (BN_print_fp(stdout, bn_a) == 0) {
+        fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+    fprintf(stdout, "\n");
 
+    if (BN_print_fp(stdout, bn_b) == 0) {
+        fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+    fprintf(stdout, "\n");
+
+    if (BN_print_fp(stdout, bn_Gx) == 0) {
+        fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+    fprintf(stdout, "\n");
+    
+    if (BN_print_fp(stdout, bn_Gy) == 0) {
+        fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+    fprintf(stdout, "\n");
+
+    if (BN_print_fp(stdout, bn_n) == 0) {
+        fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+    fprintf(stdout, "\n");
+    
+    
     BN_CTX *ctx = BN_CTX_new();
 
     // randomly generate Alice's secret
