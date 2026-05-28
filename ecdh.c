@@ -109,12 +109,71 @@ int main() {
         fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
-    fprintf(stdout, "\n");
+    fprintf(stdout, "\n\n");
     
     
     BN_CTX *ctx = BN_CTX_new();
 
-    // randomly generate Alice's secret
+    BIGNUM *a_sec = BN_new();
+    BIGNUM *b_sec = BN_new();
+	
+    
+    if(BN_rand_range(a_sec, bn_n) == 0 || BN_rand_range(b_sec, bn_n) == 0){
+        fprintf(stderr, "Could not generate rand\n");
+	return EXIT_FAILURE;
+    }
+
+    if(BN_print_fp(stdout, a_sec) == 0){
+    	fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+    fprintf(stdout, "\n");
+
+    if(BN_print_fp(stdout, b_sec) == 0){
+        fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+    fprintf(stdout, "\n");
+    
+
+    BIGNUM *a_key_x = BN_new(); // test with double pointer make sure to dereference ptr
+	
+    if(BN_mul(a_key_x, bn_Gx, a_sec, ctx) == 0){
+    	fprintf(stderr, "Could not multiply\n");
+	return EXIT_FAILURE;
+    }
+    
+    BIGNUM *b_key_x = BN_new();
+    if(BN_mul(b_key_x, bn_Gx, b_sec, ctx) == 0){
+    	fprintf(stderr, "Could not multiply\n");
+	return EXIT_FAILURE;
+    }
+
+    BIGNUM *shared_sec = BN_new();
+
+    if(BN_mul(shared_sec, a_sec, b_key_x, ctx) == 0){
+    	fprintf(stderr, "Could not multiply\n");
+	return EXIT_FAILURE;
+    }
+
+
+    // now check that bob's calculation of shared x equals what alice calculated for sec
+    BIGNUM* check = BN_new();
+    if(BN_mul(check, a_key_x, b_sec, ctx) == 0){
+    	fprintf(stderr, "Could not multiply\n");
+	return EXIT_FAILURE;
+    }
+    
+    if(BN_cmp(shared_sec, check) == 0){
+        fprintf(stdout, "Yayayayaya we won BIG(num)!\n");
+    }
+    BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_Gx); BN_free(bn_Gy); BN_free(bn_n);
+    BN_free(a_sec); BN_free(b_sec); BN_free(shared_sec); BN_free(check);
+    BN_free(a_key_x); BN_free(b_key_x);
+    BN_CTX_free(ctx);
+
+
+    /*// randomly generate Alice's secret
     int a_secret = 1 + rand() % 5;
 
     // randomly generate Bob's secret
@@ -141,7 +200,7 @@ int main() {
     // Bob calculate shared secret (compare to Alice)
     if (a_public[0] * b_secret == shared_secret[0]) {
         fprintf(stdout, "Yayayayaya we won!\n");
-    }
+    }*/
     
 
     return EXIT_SUCCESS;
