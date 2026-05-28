@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <openssl/bn.h>
+#include <string.h>
 
 /*
  * Curve info:
@@ -27,6 +28,13 @@
  * (115792089210356248762697446949407573529996955224135760342422259061068512044369)
  * h: 1
  */
+#define p "115792089210356248762697446949407573530086143415290314195533631308867097853951"
+#define a 115792089210356248762697446949407573530086143415290314195533631308867097853948
+#define b 41058363725152142129326129780047268409114441015993725554835256314039467401291
+#define Gx 48439561293906451759052585252797914202762949526041747995844080717082404635286
+#define Gy 36134250956749795798585127919587881956611106672985015071877198253568414405109
+#define n 115792089210356248762697446949407573529996955224135760342422259061068512044369
+#define h 1
 
 /*
  * Test values:
@@ -40,15 +48,29 @@
  * h: 1
  */ 
 
-#define p 23
-#define a 1
-#define b 1
-#define Gx 4
-#define Gy 5
-#define n 7
-#define h 1
+#define test_p 23
+#define test_a 1
+#define test_b 1
+#define test_Gx 4
+#define test_Gy 5
+#define test_n 7
+#define test_h 1
 
 int main() {
+
+    // bignum stuff
+    BIGNUM *bn_p = BN_new();
+    
+    //BN_dec2bn(&bn_p, str_num);
+    BN_dec2bn(&bn_p, p);
+
+    if (BN_print_fp(stdout, bn_p) == 0) {
+        fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+    fprintf(stdout, "\n");
+
+    BN_CTX *ctx = BN_CTX_new();
 
     // randomly generate Alice's secret
     int a_secret = 1 + rand() % 5;
@@ -59,14 +81,14 @@ int main() {
     // calculate Alice public key
     int a_public[2];
 
-    a_public[0] = Gx * a_secret;
-    a_public[1] = Gy * a_secret;
+    a_public[0] = test_Gx * a_secret;
+    a_public[1] = test_Gy * a_secret;
 
     // calculate Bob public key
     int b_public[2];
 
-    b_public[0] = Gx * b_secret;
-    b_public[1] = Gy * b_secret;
+    b_public[0] = test_Gx * b_secret;
+    b_public[1] = test_Gy * b_secret;
 
     // Alice calculate shared secret
     int shared_secret[2];
