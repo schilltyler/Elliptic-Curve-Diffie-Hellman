@@ -6,8 +6,9 @@
  */
 #include <stdlib.h>
 #include <stdio.h>
-#include <openssl/bn.h>
 #include <string.h>
+#include <openssl/bn.h>
+#include <openssl/evp.h>
 
 /*
  * Curve info:
@@ -167,41 +168,43 @@ int main() {
     if(BN_cmp(shared_sec, check) == 0){
         fprintf(stdout, "Yayayayaya we won BIG(num)!\n");
     }
+
+    // key derivation
+    char *secret_in_hex = BN_bn2hex(shared_sec);
+
+    if (secret_in_hex == NULL) {
+        fprintf(stdout, "Could not generate secret in hex\n");
+        return EXIT_FAILURE;
+    }
+
+    int secret_in_hex_len = strlen(secret_in_hex);
+    unsigned char *key = malloc(sizeof(char) * 32);
+
+    int result_derivation = PKCS5_PBKDF2_HMAC_SHA1(secret_in_hex,
+                                                   secret_in_hex_len,
+                                                   NULL,
+                                                   0,
+                                                   1000,
+                                                   32,
+                                                   key);
+
+    int test_len = strlen(key);
+    if(test_len != 32){
+        fprintf(stderr, "Key length does not match desired length\n");
+        return EXIT_FAILURE;
+    }
+
+    fprintf(stdout, "\nThe generated key is %s\n", key);
+    
+
+    // now test this key with a symmetric encryption algorithm, like AES/DES for example
+
+
+    // free stuff
     BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_Gx); BN_free(bn_Gy); BN_free(bn_n);
     BN_free(a_sec); BN_free(b_sec); BN_free(shared_sec); BN_free(check);
     BN_free(a_key_x); BN_free(b_key_x);
     BN_CTX_free(ctx);
-
-
-    /*// randomly generate Alice's secret
-    int a_secret = 1 + rand() % 5;
-
-    // randomly generate Bob's secret
-    int b_secret = 1 + rand() % 5;
-
-    // calculate Alice public key
-    int a_public[2];
-
-    a_public[0] = test_Gx * a_secret;
-    a_public[1] = test_Gy * a_secret;
-
-    // calculate Bob public key
-    int b_public[2];
-
-    b_public[0] = test_Gx * b_secret;
-    b_public[1] = test_Gy * b_secret;
-
-    // Alice calculate shared secret
-    int shared_secret[2];
-
-    shared_secret[0] = b_public[0] * a_secret;
-    shared_secret[1] = b_public[1] * a_secret;
-
-    // Bob calculate shared secret (compare to Alice)
-    if (a_public[0] * b_secret == shared_secret[0]) {
-        fprintf(stdout, "Yayayayaya we won!\n");
-    }*/
-    
 
     return EXIT_SUCCESS;
 }
