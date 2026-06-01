@@ -14,6 +14,7 @@
  * Curve info:
  *
  * secp256r1 (aka P-256)
+ * parameters for curve math 
  *
  */
 #define p "115792089210356248762697446949407573530086143415290314195533631308867097853951"
@@ -25,20 +26,10 @@
 #define h 1
 
 /*
- * Test values:
+ * Point Structure:
  *
- */ 
-
-#define test_p 23
-#define test_a 1
-#define test_b 1
-#define test_Gx 4
-#define test_Gy 5
-#define test_n 7
-#define test_h 1
-
-/*
- * Point Structure
+ * Points along the graph require an x,y component, necessary struct for point addition and multiplication 
+ *
  */
 typedef struct point {
     
@@ -47,6 +38,22 @@ typedef struct point {
 
 } point_t;
 
+point_t* point_new(){
+    point_t *point = malloc(sizeof(point_t*));
+    if(point == NULL){
+    	return NULL;
+    }
+
+    point->x = BN_new();
+    point->y = BN_new();
+    return point;
+
+}
+
+void free_point(point_t *point){
+    BN_free(point->x); BN_free(point->y);
+    free(point);
+}
 /*
  * Hashed Key Derivation Function
  *
@@ -67,9 +74,82 @@ typedef struct point {
     return key;
     }*/
 
+static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_n) {
+
+    point_t *result = point_new();
+
+    if (result == NULL) {
+        fprintf(stderr, "Could not malloc new point\n");
+        return NULL;
+    }
+    BN_CTX *ctx = BN_CTX_new();
+    BIGNUM *x_slope = BN_new();
+    BIGNUM *y_slope = BN_new();
+    BIGNUM *y_slope_inv = BN_new();
+    BIGNUM *slope = BN_new();
+
+    //(q->y - r->y) / (q->x - r->x);
+    if(BN_mod_sub(x_slope, r->x, q->x, bn_n, ctx) == 0 || BN_mod_sub(y_slope, r->y, q->y, bn_n, ctx) == 0 ||
+		    BN_mod_inverse(y_slope_inv, y_slope, bn_n, ctx) == 0 || BN_mod_mul(slope, x_slope, y_slope_inv, bn_n, ctx) == 0){
+    	fprintf(stderr, "Could not calculate the slope\n");
+	return NULL;
+    }
+
+
+    // (slope)^2 - x_two - x_one
+    BIGNUM *slope_2 = BN_new();
+    BIGNUM *new_x = BN_new();
+    if(BN_mod_mul(slope_2, slope, slope, bn_n, ctx) == 0 || BN_mod_sub(new_x, x_slope, slope_2, bn_n, ctx) == 0){
+	    fprintf(stderr, "Could not calculate new x\n");
+	    return NULL;
+    }
+
+    // slope(x_two - x_one) - y_one
+    BIGNUM *slope_xdiff = BN_new();
+    BIGNUM *new_y = BN_new();
+    if(BN_mod_mul(slope_xdiff, slope, x_slope, bn_n, ctx) == 0 || BN_mod_sub(new_y, r->y, slope_xdiff, bn_n, ctx) == 0){
+    	fprintf(stderr, "Could not calculate new y\n");
+	return NULL;
+    }
+
+    result->x = new_x;
+    result->y = new_y;
+    BN_free(slope_xdiff); BN_free(slope_2); BN_free(slope); BN_free(y_slope_inv); BN_free(x_slope); BN_free(y_slope); BN_CTX_free(ctx);
+
+    return result;
+}
+
+static point_t *point_multiplication(point_t *r, BIGNUM *sec, BIGNUM *bn_n){
+    // to multiply efficiently, do 2 * r, if most-sig bit is 1, add r, if not, add 0, save current result and continue
+    int numbits = BN_num_bits(sec);
+    unsigned char *bin = malloc(sizeof(char) * numbits);
+    if(BN_bn2bin(sec, bin) == 0){
+    	fprintf(stderr, "Cannot convert bignum to binary\n");
+	return NULL;
+    }
+
+    point_t *result = r;
+    for(int i = 0; i < numbits; i++){
+	if(bin[i] == '1'){
+	    point_t *mult_2 = point_addition(result, result, bn_n);
+	    point_t *result = point_addition(mult_2, result, bn_n);
+	    free_point(mult_2);
+	}
+	else{
+	    point_t *result = point_addition(result, result, bn_n);
+	}
+    }
+    free(bin); 
+    return result;
+}
+
+/*
+ * Main implementation of ECDHKE
+ *
+ * */
 int main() {
 
-    // bignum stuff
+    // transfer the strings into bignum parameters
     BIGNUM *bn_p = BN_new();
     BIGNUM *bn_a = BN_new();
     BIGNUM *bn_b = BN_new();
@@ -77,7 +157,7 @@ int main() {
     BIGNUM *bn_Gy = BN_new();
     BIGNUM *bn_n = BN_new();
     
-    //BN_dec2bn(&bn_p, str_num);
+    // BN_dec2bn: takes in a string representation of a decimal number and makes it a bignum 
     BN_dec2bn(&bn_p, p);
     BN_dec2bn(&bn_a, a);
     BN_dec2bn(&bn_b, b);
@@ -121,9 +201,16 @@ int main() {
     }
     fprintf(stdout, "\n\n");
     
-    
-    BN_CTX *ctx = BN_CTX_new();
+    point_t *gx_gy = point_new();
+    if(gx_gy == NULL){
+    	fprintf(stderr, "Could not malloc for point\n");
+	return EXIT_FAILURE;
+    }
+    // store gx and gy as a point
+    gx_gy->x = bn_Gx; gx_gy->y = bn_Gy;
 
+
+    // begin calculations 
     BIGNUM *a_sec = BN_new();
     BIGNUM *b_sec = BN_new();
 	
@@ -145,41 +232,42 @@ int main() {
     }
     fprintf(stdout, "\n");
     
+    // calculate alice and bob's keys
+    point_t *a_key = point_multiplication(gx_gy, a_sec, bn_n);
+    if(a_key == NULL){
+    	fprintf(stderr, "Point multiplication did not work\n");
+	return EXIT_FAILURE;
     
-    BIGNUM *a_key_x = BN_new(); // test with double pointer make sure to dereference ptr
-	
-    if(BN_mul(a_key_x, bn_Gx, a_sec, ctx) == 0){
-    	fprintf(stderr, "Could not multiply\n");
+    }
+
+    point_t *b_key = point_multiplication(gx_gy, b_sec, bn_n);
+    if(b_key == NULL){
+    	fprintf(stderr, "Point multiplication did not work\n");
 	return EXIT_FAILURE;
+    	
     }
     
-    BIGNUM *b_key_x = BN_new();
-    if(BN_mul(b_key_x, bn_Gx, b_sec, ctx) == 0){
-    	fprintf(stderr, "Could not multiply\n");
-	return EXIT_FAILURE;
+    // calculate their shared secret, and then check that the calculations work 
+    point_t *shared_sec = point_multiplication(b_key, a_sec, bn_n); 
+    if(shared_sec == NULL){
+    	fprintf(stderr, "Point multiplication did not work\n");
+        return EXIT_FAILURE;
     }
-
-    BIGNUM *shared_sec = BN_new();
-
-    if(BN_mul(shared_sec, a_sec, b_key_x, ctx) == 0){
-    	fprintf(stderr, "Could not multiply\n");
-	return EXIT_FAILURE;
-    }
-
 
     // now check that bob's calculation of shared x equals what alice calculated for sec
-    BIGNUM* check = BN_new();
-    if(BN_mul(check, a_key_x, b_sec, ctx) == 0){
-    	fprintf(stderr, "Could not multiply\n");
-	return EXIT_FAILURE;
+    point_t *check = point_multiplication(a_key, b_sec, bn_n);
+    if(check == NULL){
+    	fprintf(stderr, "Point multiplication did not work\n");
+        return EXIT_FAILURE;
     }
-    
-    if(BN_cmp(shared_sec, check) == 0){
+
+
+    if(BN_cmp(shared_sec->x, check->x) == 0 && BN_cmp(shared_sec->y, check->y) == 0){
         fprintf(stdout, "Yayayayaya we won BIG(num)!\n");
     }
 
     // key derivation
-    char *secret_in_hex = BN_bn2hex(shared_sec);
+    /*char *secret_in_hex = BN_bn2hex(shared_sec);
 
     if (secret_in_hex == NULL) {
         fprintf(stdout, "Could not generate secret in hex\n");
@@ -207,62 +295,12 @@ int main() {
     
 
     // now test this key with a symmetric encryption algorithm, like AES/DES for example
-
+    */
 
     // free stuff
-    BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_Gx); BN_free(bn_Gy); BN_free(bn_n);
-    BN_free(a_sec); BN_free(b_sec); BN_free(shared_sec); BN_free(check);
-    BN_free(a_key_x); BN_free(b_key_x);
-    BN_CTX_free(ctx);
+    BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_n);
+    BN_free(a_sec); BN_free(b_sec); free_point(check); free_point(b_key); free_point(a_key); free_point(shared_sec); 
 
     return EXIT_SUCCESS;
 }
 
-static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_n) {
-
-    point_t *result = malloc(sizeof(point_t*));
-
-    if (result == NULL) {
-        fprintf(stderr, "Could not malloc new point\n");
-        return NULL;
-    }
-    BN_CTX *ctx = BN_CTX_new();
-    BIGNUM *x_slope = BN_new();
-    BIGNUM *y_slope = BN_new();
-    BIGNUM *y_slope_inv = BN_new();
-    BIGNUM *slope = BN_new();
-
-    //(q->y - r->y) / (q->x - r->x);
-    if(BN_mod_sub(x_slope, r->x, q->x, bn_n, ctx) == 0 || BN_mod_sub(y_slope, r->y, q->y, bn_n, ctx) == 0 ||
-		    BN_mod_inverse(y_slope_inv, y_slope, bn_n, ctx) == 0 || BN_mod_mul(slope, x_slope, y_slope_inv, bn_n, ctx) == 0){
-    	fprintf(stderr, "Could not calculate the slope\n");
-	return NULL;
-    }
-
-
-    // (slope)^2 - x_two - x_one
-    BIGNUM *slope_2 = BN_new();
-    BIGNUM *new_x = BN_new();
-    if(BN_mod_mul(slope_2, slope, slope, bn_n, ctx) == 0 || BN_mod_sub(new_x, x_slope, slope_2, bn_n, ctx) == 0){
-	    fprintf(stderr, "Could not calculate new x\n");
-	    return NULL;
-    }
-
-    // slope(x_two - x_one) - y_one
-    BIGNUM *slope_xdiff = BN_new();
-    BIGNUM *new_y = BN_new();
-    if(BN_mod_mul(slope_xdiff, slope, x_slope, bn_n, ctx) == 0 || BN_mod_sub(new_y, r->y, slope_xdiff, bn_n, ctx) == 0){
-    	fprintf(stderr, "Could not calculate new y\n");
-	return NULL;
-    }
-
-    result->x = new_x;
-    result->y = new_y;
-
-    return result;
-}
-
-static point_t *point_multiplication(point_t *r, point_t *q, BIGNUM *bn_n){
-    point_t *result  = malloc(sizeof(point_t*));
-
-}
