@@ -60,36 +60,12 @@ typedef struct point {
  * we generate from Diffie Hellman
  *
  */
-long hkdf(long salt, ikm) {
+/*long hkdf(long salt, ikm) {
 
     long key;
 
     return key;
-}
-
-point_t* point_addition(point_t *p, point_t *q) {
-
-    point_t *result = malloc(sizeof(point_t));
-
-    if (result == NULL) {
-        fprintf(stderr, "Could not malloc new point\n");
-        return NULL;
-    }
-
-    BIGNUM *y_slope = BN_new();
-
-
-
-    //(q->y - p->y) / (q->x - p->x);
-
-    // (slope)^2 - x_two - x_one
-    int x_sum = 0;
-
-    // slope(x_two - x_one) - y_one
-    int y_sum = 0;
-
-    return result;
-}
+    }*/
 
 int main() {
 
@@ -100,7 +76,6 @@ int main() {
     BIGNUM *bn_Gx = BN_new();
     BIGNUM *bn_Gy = BN_new();
     BIGNUM *bn_n = BN_new();
-    // did we say we did not have to do one for h?
     
     //BN_dec2bn(&bn_p, str_num);
     BN_dec2bn(&bn_p, p);
@@ -170,7 +145,7 @@ int main() {
     }
     fprintf(stdout, "\n");
     
-
+    
     BIGNUM *a_key_x = BN_new(); // test with double pointer make sure to dereference ptr
 	
     if(BN_mul(a_key_x, bn_Gx, a_sec, ctx) == 0){
@@ -241,4 +216,53 @@ int main() {
     BN_CTX_free(ctx);
 
     return EXIT_SUCCESS;
+}
+
+static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_n) {
+
+    point_t *result = malloc(sizeof(point_t*));
+
+    if (result == NULL) {
+        fprintf(stderr, "Could not malloc new point\n");
+        return NULL;
+    }
+    BN_CTX *ctx = BN_CTX_new();
+    BIGNUM *x_slope = BN_new();
+    BIGNUM *y_slope = BN_new();
+    BIGNUM *y_slope_inv = BN_new();
+    BIGNUM *slope = BN_new();
+
+    //(q->y - r->y) / (q->x - r->x);
+    if(BN_mod_sub(x_slope, r->x, q->x, bn_n, ctx) == 0 || BN_mod_sub(y_slope, r->y, q->y, bn_n, ctx) == 0 ||
+		    BN_mod_inverse(y_slope_inv, y_slope, bn_n, ctx) == 0 || BN_mod_mul(slope, x_slope, y_slope_inv, bn_n, ctx) == 0){
+    	fprintf(stderr, "Could not calculate the slope\n");
+	return NULL;
+    }
+
+
+    // (slope)^2 - x_two - x_one
+    BIGNUM *slope_2 = BN_new();
+    BIGNUM *new_x = BN_new();
+    if(BN_mod_mul(slope_2, slope, slope, bn_n, ctx) == 0 || BN_mod_sub(new_x, x_slope, slope_2, bn_n, ctx) == 0){
+	    fprintf(stderr, "Could not calculate new x\n");
+	    return NULL;
+    }
+
+    // slope(x_two - x_one) - y_one
+    BIGNUM *slope_xdiff = BN_new();
+    BIGNUM *new_y = BN_new();
+    if(BN_mod_mul(slope_xdiff, slope, x_slope, bn_n, ctx) == 0 || BN_mod_sub(new_y, r->y, slope_xdiff, bn_n, ctx) == 0){
+    	fprintf(stderr, "Could not calculate new y\n");
+	return NULL;
+    }
+
+    result->x = new_x;
+    result->y = new_y;
+
+    return result;
+}
+
+static point_t *point_multiplication(point_t *r, point_t *q, BIGNUM *bn_n){
+    point_t *result  = malloc(sizeof(point_t*));
+
 }
