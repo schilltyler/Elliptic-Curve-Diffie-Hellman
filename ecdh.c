@@ -36,7 +36,7 @@ typedef struct point {
     
     BIGNUM *x; // x-coordinate
     BIGNUM *y; // y-coordinate
-
+    int is_infinity; // to mark whether this is a point at infinity, in which you treat it as the identity element 
 } point_t;
 
 point_t* point_new(){
@@ -47,6 +47,7 @@ point_t* point_new(){
 
     point->x = BN_new();
     point->y = BN_new();
+    point->is_infinity = 0; // make it automatically not the point at infinity
     return point;
 
 }
@@ -84,20 +85,54 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
         return NULL;
     }
 
+    // first check if they are the "zero" points
+    if(r->is_infinity == 1) {
+    	free_point(result);
+	return q;
+    }
+
+    if(q->is_infinity == 1) {
+	free_point(result);
+    	return r;
+    }
+
+    // now test that whether the points are inverses
     BN_CTX *ctx = BN_CTX_new();
-    BIGNUM *x_slope = BN_new();
-    BIGNUM *y_slope = BN_new();
-    BIGNUM *x_slope_inv = BN_new();
+    BIGNUM *test_y = BN_new();
+
+    if (!BN_mod_add(test_y, r->y, q->y, bn_p, ctx)) {
+    	fprintf(stderr, "Cannot add y vals\n");
+	return NULL;
+    }
+
+    if (BN_cmp(r->x, q->x) == 0 && BN_is_zero(test_y)) {
+        // we have inverses of each other, so store the point as a point at infinity
+        result->is_infinity = 1; // mark this true, we should check if its infinity before other calculations
+    	BN_free(test_y); BN_CTX_free(ctx);
+	return result;
+    }
+    BN_free(test_y);
+
+    // prepare to calculate slope in any case
     BIGNUM *slope = BN_new();
 
-    if (r == q) {
+
+    if (BN_cmp(r->x, q->x) == 0 && BN_cmp(r->y, q->y) == 0) {
         // adding the same point
+	// first, consider that y is 0
+	
+	if (BN_is_zero(r->y)) {
+	    result->is_infinity = 1;
+	    BN_free(slope);
+	    return result;	
+	}
+
         BIGNUM *rx_squared = BN_new(); // free this
 
         // square r->x
         if (!BN_mod_mul(rx_squared, r->x, r->x, bn_p, ctx)) {
             fprintf(stderr, "Could not square x\n");
-            return NULL;
+	    return NULL;
         }
 
         // multiply (r->x)^2 by 3
@@ -107,7 +142,8 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
         if (!BN_mod_mul(rx_sqr_mul, rx_squared, bn_3, bn_p, ctx)) {
 	    fprintf(stderr, "Could not multiply 3 and rx^2.\n");
 	    return NULL;
-	} 
+	}
+        BN_free(bn_3); BN_free(rx_squared);	
 
 	// continue by adding a
 	BIGNUM *numerator = BN_new(); 
@@ -115,6 +151,7 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
 	    fprintf(stderr, "Could not add for numerator\n");
 	    return NULL;
 	}
+	BN_free(rx_sqr_mul);
 
 	BIGNUM *denominator = BN_new();
 	BIGNUM *denom_inv = BN_new();
@@ -124,23 +161,30 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
 	   fprintf(stderr, "Could not multiply denominator\n");
 	   return NULL;
 	}
+	BN_free(bn_2);
 
 	// now calculate the inverse and finish with the product
 	if (!BN_mod_inverse(denom_inv, denominator, bn_p, ctx)) {
 	    fprintf(stderr, "Could not calculate denominator inverse\n");
 	    return NULL;
 	}
-	BIGNUM *slope = BN_new();
+	BN_free(denominator);
+
 	if (!BN_mod_mul(slope, numerator, denom_inv, bn_p, ctx)) {
 	    fprintf(stderr, "Could not multiply to find the slope for adding two points.\n");
 	    return NULL;
 	}
-
+	BN_free(denom_inv); BN_free(numerator); // finish cleaning 
+	
 	
     }
+    // declare these here bc at this point we 
+    
     else {
-        // adding points that are different
-
+        // adding points that are different and NOT points at infinity
+	BIGNUM *x_slope = BN_new();
+    	BIGNUM *y_slope = BN_new();
+    	BIGNUM *x_slope_inv = BN_new();
         //(r->y - q->y) / (r->x - q->x);
         if (BN_mod_sub(x_slope, r->x, q->x, bn_p, ctx) == 0) {
             fprintf(stderr, "Could not calculate x_slope\n");
@@ -162,33 +206,50 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
             fprintf(stderr, "Could not caculate y slope inverse\n");
             return NULL;
         }
+	BN_free(x_slope);
 
         if (BN_mod_mul(slope, y_slope, x_slope_inv, bn_p, ctx) == 0) {
             fprintf(stderr, "Could not calculate slope\n");
             return NULL;
         }
+	BN_free(y_slope); BN_free(x_slope_inv);
     }
-
+    if (slope == NULL) {
+        fprintf(stderr, "Slope was not created for some reason?\n");
+	return NULL;
+    }
 
     // (slope)^2 - x_two - x_one
     BIGNUM *slope_2 = BN_new();
+    BIGNUM *x_sum = BN_new();
     BIGNUM *new_x = BN_new();
-    if(BN_mod_mul(slope_2, slope, slope, bn_p, ctx) == 0 || BN_mod_sub(new_x, x_slope, slope_2, bn_p, ctx) == 0){
-	    fprintf(stderr, "Could not calculate new x\n");
-	    return NULL;
+    if (BN_mod_add(x_sum, r->x, q->x, bn_p, ctx) == 0) { // crucial mistake, do not subtract here
+    	fprintf(stderr, "Could not subtract xs\n");
+	return NULL;
     }
 
-    // slope(x_two - x_one) - y_one
+    if (BN_mod_mul(slope_2, slope, slope, bn_p, ctx) == 0 || BN_mod_sub(new_x, slope_2, x_sum, bn_p, ctx) == 0){
+	fprintf(stderr, "Could not calculate new x\n");
+	return NULL;
+    }
+
+    // slope(x_two - new_x) - y_one -> bug here, it uses the x result
+    BIGNUM *new_xdiff = BN_new();
+    if (!BN_mod_sub(new_xdiff, r->x, new_x, bn_p, ctx)) {
+    	fprintf(stderr, "Could not subtract new x and old x\n");
+	return NULL;
+    }
+
     BIGNUM *slope_xdiff = BN_new();
     BIGNUM *new_y = BN_new();
-    if(BN_mod_mul(slope_xdiff, slope, x_slope, bn_p, ctx) == 0 || BN_mod_sub(new_y, r->y, slope_xdiff, bn_p, ctx) == 0){
+    if (BN_mod_mul(slope_xdiff, slope, new_xdiff, bn_p, ctx) == 0 || BN_mod_sub(new_y, slope_xdiff, r->y, bn_p, ctx) == 0) {
     	fprintf(stderr, "Could not calculate new y\n");
 	return NULL;
     }
 
     result->x = new_x;
     result->y = new_y;
-    BN_free(slope_xdiff); BN_free(slope_2); BN_free(slope); BN_free(x_slope_inv); BN_free(x_slope); BN_free(y_slope); BN_CTX_free(ctx);
+    BN_free(slope_xdiff); BN_free(slope_2); BN_free(slope); BN_free(new_xdiff); BN_free(x_sum); BN_CTX_free(ctx);
 
     return result;
 }
