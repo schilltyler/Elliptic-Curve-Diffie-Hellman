@@ -9,6 +9,7 @@
 #include <string.h>
 #include <openssl/bn.h>
 #include <openssl/evp.h>
+#include <openssl/err.h>
 
 /*
  * Curve info:
@@ -74,7 +75,7 @@ void free_point(point_t *point){
     return key;
     }*/
 
-static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_n) {
+static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_a) {
 
     point_t *result = point_new();
 
@@ -82,24 +83,64 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_n) {
         fprintf(stderr, "Could not malloc new point\n");
         return NULL;
     }
+
     BN_CTX *ctx = BN_CTX_new();
     BIGNUM *x_slope = BN_new();
     BIGNUM *y_slope = BN_new();
-    BIGNUM *y_slope_inv = BN_new();
+    BIGNUM *x_slope_inv = BN_new();
     BIGNUM *slope = BN_new();
 
-    //(q->y - r->y) / (q->x - r->x);
-    if(BN_mod_sub(x_slope, r->x, q->x, bn_n, ctx) == 0 || BN_mod_sub(y_slope, r->y, q->y, bn_n, ctx) == 0 ||
-		    BN_mod_inverse(y_slope_inv, y_slope, bn_n, ctx) == 0 || BN_mod_mul(slope, x_slope, y_slope_inv, bn_n, ctx) == 0){
-    	fprintf(stderr, "Could not calculate the slope\n");
-	return NULL;
+    if (r == q) {
+        // adding the same point
+        BIGNUM *rx_squared = BN_new(); // free this
+
+        // square r->x
+        if (!BN_mul(rx_squared, r->x, r->x, ctx)) {
+            fprintf(stderr, "Could not square x\n");
+            return NULL;
+        }
+
+        // multiply (r->x)^2 by 3
+        BIGNUM *rx_sqr_mul = BN_new(); // free this
+
+        if (!BN_mul(rx_sqr_mul, rx_squared, 
+    }
+    else {
+        // adding points that are different
+
+        //(r->y - q->y) / (r->x - q->x);
+        if (BN_mod_sub(x_slope, r->x, q->x, bn_p, ctx) == 0) {
+            fprintf(stderr, "Could not calculate x_slope\n");
+            return NULL;
+        }
+
+        if (BN_mod_sub(y_slope, r->y, q->y, bn_p, ctx) == 0) {
+            fprintf(stderr, "Could not calculate y_slope\n");
+            return NULL;
+        }
+
+        if (BN_mod_inverse(x_slope_inv, x_slope, bn_p, ctx) == NULL) {
+            // get the error code
+            unsigned long err_code = ERR_get_error();
+
+            // print out the code in human-readable way
+            fprintf(stderr, "%s\n", ERR_error_string(err_code, NULL));
+
+            fprintf(stderr, "Could not caculate y slope inverse\n");
+            return NULL;
+        }
+
+        if (BN_mod_mul(slope, y_slope, x_slope_inv, bn_p, ctx) == 0) {
+            fprintf(stderr, "Could not calculate slope\n");
+            return NULL;
+        }
     }
 
 
     // (slope)^2 - x_two - x_one
     BIGNUM *slope_2 = BN_new();
     BIGNUM *new_x = BN_new();
-    if(BN_mod_mul(slope_2, slope, slope, bn_n, ctx) == 0 || BN_mod_sub(new_x, x_slope, slope_2, bn_n, ctx) == 0){
+    if(BN_mod_mul(slope_2, slope, slope, bn_p, ctx) == 0 || BN_mod_sub(new_x, x_slope, slope_2, bn_p, ctx) == 0){
 	    fprintf(stderr, "Could not calculate new x\n");
 	    return NULL;
     }
@@ -107,39 +148,47 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_n) {
     // slope(x_two - x_one) - y_one
     BIGNUM *slope_xdiff = BN_new();
     BIGNUM *new_y = BN_new();
-    if(BN_mod_mul(slope_xdiff, slope, x_slope, bn_n, ctx) == 0 || BN_mod_sub(new_y, r->y, slope_xdiff, bn_n, ctx) == 0){
+    if(BN_mod_mul(slope_xdiff, slope, x_slope, bn_p, ctx) == 0 || BN_mod_sub(new_y, r->y, slope_xdiff, bn_p, ctx) == 0){
     	fprintf(stderr, "Could not calculate new y\n");
 	return NULL;
     }
 
     result->x = new_x;
     result->y = new_y;
-    BN_free(slope_xdiff); BN_free(slope_2); BN_free(slope); BN_free(y_slope_inv); BN_free(x_slope); BN_free(y_slope); BN_CTX_free(ctx);
+    BN_free(slope_xdiff); BN_free(slope_2); BN_free(slope); BN_free(x_slope_inv); BN_free(x_slope); BN_free(y_slope); BN_CTX_free(ctx);
 
     return result;
 }
 
-static point_t *point_multiplication(point_t *r, BIGNUM *sec, BIGNUM *bn_n){
+static point_t *point_multiplication(point_t *r, BIGNUM *sec, BIGNUM *bn_p, BIGNUM *bn_a){
     // to multiply efficiently, do 2 * r, if most-sig bit is 1, add r, if not, add 0, save current result and continue
     int numbits = BN_num_bits(sec);
-    unsigned char *bin = malloc(sizeof(char) * numbits);
-    if(BN_bn2bin(sec, bin) == 0){
-    	fprintf(stderr, "Cannot convert bignum to binary\n");
-	return NULL;
-    }
 
     point_t *result = r;
-    for(int i = 0; i < numbits; i++){
-	if(bin[i] == '1'){
-	    point_t *mult_2 = point_addition(result, result, bn_n);
-	    point_t *result = point_addition(mult_2, result, bn_n);
-	    free_point(mult_2);
-	}
-	else{
-	    point_t *result = point_addition(result, result, bn_n);
-	}
+
+    for (int i = numbits - 1; i > 0; i --) {
+        if (BN_is_bit_set(sec, i) == 1) {
+            point_t *mult_2 = point_addition(result, result, bn_p, bn_a);
+
+            if (mult_2 == NULL) {
+                fprintf(stderr, "Error in addition\n");
+                return NULL;
+            }
+
+            point_t *result = point_addition(mult_2, result, bn_p, bn_a);
+
+            if (result == NULL) {
+                fprintf(stderr, "Error in addition\n");
+                return NULL;
+            }
+
+            free_point(mult_2);
+        }
+        else {
+            point_t *result = point_addition(result, result, bn_p, bn_a);
+        }
     }
-    free(bin); 
+
     return result;
 }
 
@@ -233,14 +282,14 @@ int main() {
     fprintf(stdout, "\n");
     
     // calculate alice and bob's keys
-    point_t *a_key = point_multiplication(gx_gy, a_sec, bn_n);
+    point_t *a_key = point_multiplication(gx_gy, a_sec, bn_p, bn_a);
     if(a_key == NULL){
     	fprintf(stderr, "Point multiplication did not work\n");
 	return EXIT_FAILURE;
     
     }
 
-    point_t *b_key = point_multiplication(gx_gy, b_sec, bn_n);
+    point_t *b_key = point_multiplication(gx_gy, b_sec, bn_p, bn_a);
     if(b_key == NULL){
     	fprintf(stderr, "Point multiplication did not work\n");
 	return EXIT_FAILURE;
@@ -248,14 +297,14 @@ int main() {
     }
     
     // calculate their shared secret, and then check that the calculations work 
-    point_t *shared_sec = point_multiplication(b_key, a_sec, bn_n); 
+    point_t *shared_sec = point_multiplication(b_key, a_sec, bn_p, bn_a); 
     if(shared_sec == NULL){
     	fprintf(stderr, "Point multiplication did not work\n");
         return EXIT_FAILURE;
     }
 
     // now check that bob's calculation of shared x equals what alice calculated for sec
-    point_t *check = point_multiplication(a_key, b_sec, bn_n);
+    point_t *check = point_multiplication(a_key, b_sec, bn_p, bn_a);
     if(check == NULL){
     	fprintf(stderr, "Point multiplication did not work\n");
         return EXIT_FAILURE;
