@@ -214,10 +214,6 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
         }
 	BN_free(y_slope); BN_free(x_slope_inv);
     }
-    if (slope == NULL) {
-        fprintf(stderr, "Slope was not created for some reason?\n");
-	return NULL;
-    }
 
     // (slope)^2 - x_two - x_one
     BIGNUM *slope_2 = BN_new();
@@ -249,6 +245,7 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
 
     result->x = new_x;
     result->y = new_y;
+    result->is_infinity = 0;
     BN_free(slope_xdiff); BN_free(slope_2); BN_free(slope); BN_free(new_xdiff); BN_free(x_sum); BN_CTX_free(ctx);
 
     return result;
@@ -258,29 +255,27 @@ static point_t *point_multiplication(point_t *r, BIGNUM *sec, BIGNUM *bn_p, BIGN
     // to multiply efficiently, do 2 * r, if most-sig bit is 1, add r, if not, add 0, save current result and continue
     int numbits = BN_num_bits(sec);
 
-    point_t *result = r;
+    point_t *result = point_new();
+    // set the infinity to yes for now
+    result->is_infinity = 1;
 
-    for (int i = numbits - 1; i > 0; i --) {
-        if (BN_is_bit_set(sec, i) == 1) {
-            point_t *mult_2 = point_addition(result, result, bn_p, bn_a);
-
-            if (mult_2 == NULL) {
+    for (int i = numbits - 1; i >= 0; i --) {
+	// from serious crypto: point is multiplied by 2 on each step regardless
+	point_t *mult_2 = point_addition(result, result, bn_p, bn_a);
+        // free the current result and store it
+	if (mult_2 == NULL) {
                 fprintf(stderr, "Error in addition\n");
                 return NULL;
-            }
-
-            point_t *result = point_addition(mult_2, result, bn_p, bn_a);
-
-            if (result == NULL) {
-                fprintf(stderr, "Error in addition\n");
-                return NULL;
-            }
-
-            free_point(mult_2);
         }
-        else {
-            point_t *result = point_addition(result, result, bn_p, bn_a);
-        }
+	free_point(result); // free the result as we track it
+	result = mult_2;
+
+	// now check if the extra step of adding P in is needed 
+	if (BN_is_bit_set(sec, i) == 1) {
+            point_t *add_r = point_addition(result, r, bn_p, bn_a);
+	    free_point(result);
+	    result = add_r;
+    	}
     }
 
     return result;
