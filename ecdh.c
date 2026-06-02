@@ -95,15 +95,48 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
         BIGNUM *rx_squared = BN_new(); // free this
 
         // square r->x
-        if (!BN_mul(rx_squared, r->x, r->x, ctx)) {
+        if (!BN_mod_mul(rx_squared, r->x, r->x, bn_p, ctx)) {
             fprintf(stderr, "Could not square x\n");
             return NULL;
         }
 
         // multiply (r->x)^2 by 3
         BIGNUM *rx_sqr_mul = BN_new(); // free this
+	BIGNUM *bn_3 = BN_new();
+	BN_dec2bn(&bn_3, "3");
+        if (!BN_mod_mul(rx_sqr_mul, rx_squared, bn_3, bn_p, ctx)) {
+	    fprintf(stderr, "Could not multiply 3 and rx^2.\n");
+	    return NULL;
+	} 
 
-        if (!BN_mul(rx_sqr_mul, rx_squared, 
+	// continue by adding a
+	BIGNUM *numerator = BN_new(); 
+	if (!BN_mod_add(numerator, rx_sqr_mul, bn_a, bn_p, ctx)) {
+	    fprintf(stderr, "Could not add for numerator\n");
+	    return NULL;
+	}
+
+	BIGNUM *denominator = BN_new();
+	BIGNUM *denom_inv = BN_new();
+	BIGNUM *bn_2 = BN_new();
+	BN_dec2bn(&bn_2, "2");
+	if (!BN_mod_mul(denominator, r->y, bn_2, bn_p, ctx)) {
+	   fprintf(stderr, "Could not multiply denominator\n");
+	   return NULL;
+	}
+
+	// now calculate the inverse and finish with the product
+	if (!BN_mod_inverse(denom_inv, denominator, bn_p, ctx)) {
+	    fprintf(stderr, "Could not calculate denominator inverse\n");
+	    return NULL;
+	}
+	BIGNUM *slope = BN_new();
+	if (!BN_mod_mul(slope, numerator, denom_inv, bn_p, ctx)) {
+	    fprintf(stderr, "Could not multiply to find the slope for adding two points.\n");
+	    return NULL;
+	}
+
+	
     }
     else {
         // adding points that are different
