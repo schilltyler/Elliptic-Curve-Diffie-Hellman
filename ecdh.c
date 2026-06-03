@@ -10,6 +10,8 @@
 #include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
+#include <openssl/sha.h>
+#include <openssl/evp.h>
 
 /*
  * Curve info:
@@ -39,9 +41,11 @@ typedef struct point {
     int is_infinity; // to mark whether this is a point at infinity, in which you treat it as the identity element 
 } point_t;
 
-point_t* point_new(){
+point_t* point_new() {
+
     point_t *point = malloc(sizeof(point_t*));
-    if(point == NULL){
+
+    if (point == NULL){
     	return NULL;
     }
 
@@ -49,7 +53,6 @@ point_t* point_new(){
     point->y = BN_new();
     point->is_infinity = 0; // make it automatically not the point at infinity
     return point;
-
 }
 
 void free_point(point_t *point){
@@ -63,18 +66,42 @@ void free_point(point_t *point){
  *
  * Parameters:
  *
- * salt:
+ * salt: random number
  *
  * ikm: (input key material) this is the shared secret
  * we generate from Diffie Hellman
  *
  */
-/*long hkdf(long salt, ikm) {
+int hkdf(unsigned char *key, long salt, BIGNUM *ikm) {
 
-    long key;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_create();
 
-    return key;
-    }*/
+    EVP_MD_CTX_init(ctx);
+
+    if (!EVP_DigestInit_ex(ctx, EVP_sha256(), NULL)) {
+        fprintf(stderr, "Error initializing hash\n");
+        return EXIT_FAILURE;
+    }
+
+    if (!EVP_DigestUpdate(ctx, ikm, sizeof(ikm))) {
+        fprintf(stderr, "Error hashing ikm\n");
+        return EXIT_FAILURE;
+    }
+
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len;
+
+    if (!EVP_DigestFinal_ex(ctx, hash, &hash_len)) {
+        fprintf(stderr, "Error retreiving hash\n");
+        return EXIT_FAILURE;
+    }
+
+    fprintf(stdout, "Hash: %s\n", hash);
+
+    memcpy(key, hash, hash_len);
+
+    return EXIT_SUCCESS;
+}
 
 static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_a) {
 
@@ -83,17 +110,17 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
     if (result == NULL) {
         fprintf(stderr, "Could not malloc new point\n");
         free_point(result);
-	return NULL;
+	    return NULL;
     }
 
     // first check if they are the "zero" points
     if(r->is_infinity == 1) {
     	result = q;
-	return result;
+	    return result;
     }
 
     if(q->is_infinity == 1) {
-	result = r;
+	    result = r;
     	return result;
     }
 
@@ -103,107 +130,111 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
 
     if (!BN_mod_add(test_y, r->y, q->y, bn_p, ctx)) {
     	fprintf(stderr, "Cannot add y vals\n");
-	free_point(result); BN_CTX_free(ctx); BN_free(test_y);
-	return NULL;
+	    free_point(result); BN_CTX_free(ctx); BN_free(test_y);
+	    return NULL;
     }
 
     if (BN_cmp(r->x, q->x) == 0 && BN_is_zero(test_y)) {
         // we have inverses of each other, so store the point as a point at infinity
         result->is_infinity = 1; // mark this true, we should check if its infinity before other calculations
     	BN_free(test_y); BN_CTX_free(ctx);
-	return result;
+	    return result;
     }
+
     BN_free(test_y);
 
     // prepare to calculate slope in any case
     BIGNUM *slope = BN_new();
 
+    // check if the points are the same
+    if (BN_cmp(r->x, q->x) == 0 && BN_cmp(r->y, q->y) == 0) {    
 
-    if (BN_cmp(r->x, q->x) == 0 && BN_cmp(r->y, q->y) == 0) {
-        // adding the same point
-	// first, consider that y is 0
-	
-	if (BN_is_zero(r->y)) {
-	    result->is_infinity = 1;
-	    BN_free(slope); BN_CTX_free(ctx);
-	    return result;	
-	}
+        // first, consider that y is 0
+	    if (BN_is_zero(r->y)) {
+	        result->is_infinity = 1;
+	        BN_free(slope); BN_CTX_free(ctx);
+	        return result;	
+	    }
 
         BIGNUM *rx_squared = BN_new(); // free this
 
         // square r->x
         if (!BN_mod_mul(rx_squared, r->x, r->x, bn_p, ctx)) {
             fprintf(stderr, "Could not square x\n");
-	    BN_free(slope); BN_CTX_free(ctx); BN_free(rx_squared); free_point(result);
-	    return NULL;
+	        BN_free(slope); BN_CTX_free(ctx); BN_free(rx_squared); free_point(result);
+	        return NULL;
         }
 
         // multiply (r->x)^2 by 3
         BIGNUM *rx_sqr_mul = BN_new(); // free this
-	BIGNUM *bn_3 = BN_new();
-	BN_dec2bn(&bn_3, "3");
+	    BIGNUM *bn_3 = BN_new();
+	    BN_dec2bn(&bn_3, "3");
+
         if (!BN_mod_mul(rx_sqr_mul, rx_squared, bn_3, bn_p, ctx)) {
-	    fprintf(stderr, "Could not multiply 3 and rx^2.\n");
-	    BN_free(slope); BN_CTX_free(ctx); BN_free(bn_3); BN_free(rx_squared);
-	    BN_free(rx_sqr_mul); free_point(result);
-	    return NULL;
-	}
+	        fprintf(stderr, "Could not multiply 3 and rx^2.\n");
+	        BN_free(slope); BN_CTX_free(ctx); BN_free(bn_3); BN_free(rx_squared);
+	        BN_free(rx_sqr_mul); free_point(result);
+	        return NULL;
+	    }
+
         BN_free(bn_3); BN_free(rx_squared);	
 
-	// continue by adding a
-	BIGNUM *numerator = BN_new(); 
-	if (!BN_mod_add(numerator, rx_sqr_mul, bn_a, bn_p, ctx)) {
-	    fprintf(stderr, "Could not add for numerator\n");
-	    BN_free(numerator); BN_free(slope); BN_free(rx_sqr_mul); BN_free(slope); BN_CTX_free(ctx); free_point(result);
-	    return NULL;
-	}
-	BN_free(rx_sqr_mul);
+	    // continue by adding a
+	    BIGNUM *numerator = BN_new(); 
+	    if (!BN_mod_add(numerator, rx_sqr_mul, bn_a, bn_p, ctx)) {
+	        fprintf(stderr, "Could not add for numerator\n");
+	        BN_free(numerator); BN_free(slope); BN_free(rx_sqr_mul); BN_free(slope); BN_CTX_free(ctx); free_point(result);
+	        return NULL;
+	    }
+	    
+        BN_free(rx_sqr_mul);
 
-	BIGNUM *denominator = BN_new();
-	BIGNUM *denom_inv = BN_new();
-	BIGNUM *bn_2 = BN_new();
-	BN_dec2bn(&bn_2, "2");
-	if (!BN_mod_mul(denominator, r->y, bn_2, bn_p, ctx)) {
-	   fprintf(stderr, "Could not multiply denominator\n");
-	   BN_free(slope); BN_free(denominator); BN_free(denom_inv); BN_free(bn_2); BN_CTX_free(ctx); BN_free(numerator); free_point(result);
-	   return NULL;
-	}
-	BN_free(bn_2);
+	    BIGNUM *denominator = BN_new();
+	    BIGNUM *denom_inv = BN_new();
+	    BIGNUM *bn_2 = BN_new();
+	    BN_dec2bn(&bn_2, "2");
 
-	// now calculate the inverse and finish with the product
-	if (!BN_mod_inverse(denom_inv, denominator, bn_p, ctx)) {
-	    fprintf(stderr, "Could not calculate denominator inverse\n");
-	    BN_free(slope); BN_free(denominator); BN_free(denom_inv); BN_CTX_free(ctx); BN_free(numerator); free_point(result);
-	    return NULL;
-	}
-	BN_free(denominator);
+	    if (!BN_mod_mul(denominator, r->y, bn_2, bn_p, ctx)) {
+	        fprintf(stderr, "Could not multiply denominator\n");
+	        BN_free(slope); BN_free(denominator); BN_free(denom_inv); BN_free(bn_2); BN_CTX_free(ctx); BN_free(numerator); free_point(result);
+	        return NULL;
+	    }
+	    
+        BN_free(bn_2);
 
-	if (!BN_mod_mul(slope, numerator, denom_inv, bn_p, ctx)) {
-	    fprintf(stderr, "Could not multiply to find the slope for adding two points.\n");
-	    BN_free(slope); BN_free(numerator); BN_free(denom_inv); BN_CTX_free(ctx); free_point(result);
-	    return NULL;
+	    // now calculate the inverse and finish with the product
+	    if (!BN_mod_inverse(denom_inv, denominator, bn_p, ctx)) {
+	        fprintf(stderr, "Could not calculate denominator inverse\n");
+	        BN_free(slope); BN_free(denominator); BN_free(denom_inv); BN_CTX_free(ctx); BN_free(numerator); free_point(result);
+	        return NULL;
+	    }
+	    
+        BN_free(denominator);
+
+	    if (!BN_mod_mul(slope, numerator, denom_inv, bn_p, ctx)) {
+	        fprintf(stderr, "Could not multiply to find the slope for adding two points.\n");
+	        BN_free(slope); BN_free(numerator); BN_free(denom_inv); BN_CTX_free(ctx); free_point(result);
+	        return NULL;
+	    }
+	    
+        BN_free(denom_inv); BN_free(numerator); // finish cleaning 
 	}
-	BN_free(denom_inv); BN_free(numerator); // finish cleaning 
-	
-	
-    }
-    // declare these here bc at this point we 
-    
     else {
         // adding points that are different and NOT points at infinity
-	BIGNUM *x_slope = BN_new();
+	    BIGNUM *x_slope = BN_new();
     	BIGNUM *y_slope = BN_new();
     	BIGNUM *x_slope_inv = BN_new();
+
         //(r->y - q->y) / (r->x - q->x);
         if (BN_mod_sub(x_slope, r->x, q->x, bn_p, ctx) == 0) {
             fprintf(stderr, "Could not calculate x_slope\n");
-	    BN_free(slope); BN_free(y_slope); BN_free(x_slope); BN_free(x_slope_inv); BN_CTX_free(ctx); free_point(result);
+	        BN_free(slope); BN_free(y_slope); BN_free(x_slope); BN_free(x_slope_inv); BN_CTX_free(ctx); free_point(result);
             return NULL;
         }
 
         if (BN_mod_sub(y_slope, r->y, q->y, bn_p, ctx) == 0) {
             fprintf(stderr, "Could not calculate y_slope\n");
-	    BN_free(slope); BN_free(y_slope); BN_free(x_slope); BN_free(x_slope_inv); BN_CTX_free(ctx); free_point(result);
+	        BN_free(slope); BN_free(y_slope); BN_free(x_slope); BN_free(x_slope_inv); BN_CTX_free(ctx); free_point(result);
             return NULL;
         }
 
@@ -215,52 +246,57 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
             fprintf(stderr, "%s\n", ERR_error_string(err_code, NULL));
 
             fprintf(stderr, "Could not caculate y slope inverse\n");
-	    BN_free(slope); BN_free(y_slope); BN_free(x_slope); BN_free(x_slope_inv); BN_CTX_free(ctx); free_point(result);
+	        BN_free(slope); BN_free(y_slope); BN_free(x_slope); BN_free(x_slope_inv); BN_CTX_free(ctx); free_point(result);
             return NULL;
         }
-	BN_free(x_slope);
+	    
+        BN_free(x_slope);
 
         if (BN_mod_mul(slope, y_slope, x_slope_inv, bn_p, ctx) == 0) {
             fprintf(stderr, "Could not calculate slope\n");
             BN_free(slope); BN_free(y_slope); BN_free(x_slope_inv); BN_CTX_free(ctx); free_point(result);
-	    return NULL;
+	        return NULL;
         }
-	BN_free(y_slope); BN_free(x_slope_inv);
+
+	    BN_free(y_slope); BN_free(x_slope_inv);
     }
 
     // (slope)^2 - x_two - x_one
     BIGNUM *slope_2 = BN_new();
     BIGNUM *x_sum = BN_new();
     BIGNUM *new_x = BN_new();
+
     if (BN_mod_add(x_sum, r->x, q->x, bn_p, ctx) == 0) { // crucial mistake, do not subtract here
     	fprintf(stderr, "Could not subtract xs\n");
-	free_point(result); BN_free(slope); BN_free(x_sum); BN_CTX_free(ctx); BN_free(new_x); BN_free(slope_2);
-	return NULL;
+	    free_point(result); BN_free(slope); BN_free(x_sum); BN_CTX_free(ctx); BN_free(new_x); BN_free(slope_2);
+	    return NULL;
     }
 
     if (BN_mod_mul(slope_2, slope, slope, bn_p, ctx) == 0 || BN_mod_sub(new_x, slope_2, x_sum, bn_p, ctx) == 0){
-	fprintf(stderr, "Could not calculate new x\n");
-	BN_free(new_x);
-	BN_free(slope_2); BN_free(slope); BN_free(x_sum); BN_CTX_free(ctx);
-	return NULL;
+	    fprintf(stderr, "Could not calculate new x\n");
+	    BN_free(new_x);
+	    BN_free(slope_2); BN_free(slope); BN_free(x_sum); BN_CTX_free(ctx);
+	    return NULL;
     }
 
     // slope(x_two - new_x) - y_one -> bug here, it uses the x result
     BIGNUM *new_xdiff = BN_new();
+
     if (!BN_mod_sub(new_xdiff, r->x, new_x, bn_p, ctx)) {
     	fprintf(stderr, "Could not subtract new x and old x\n");
-	BN_free(new_x); 
+	    BN_free(new_x); 
         BN_free(slope_2); BN_free(slope); BN_free(new_xdiff); BN_free(x_sum); BN_CTX_free(ctx);
-	return NULL;
+	    return NULL;
     }
 
     BIGNUM *slope_xdiff = BN_new();
     BIGNUM *new_y = BN_new();
+
     if (BN_mod_mul(slope_xdiff, slope, new_xdiff, bn_p, ctx) == 0 || BN_mod_sub(new_y, slope_xdiff, r->y, bn_p, ctx) == 0) {
     	fprintf(stderr, "Could not calculate new y\n");
-	BN_free(new_x); BN_free(new_y); BN_free(slope_xdiff);
-	BN_free(slope_2); BN_free(slope); BN_free(new_xdiff); BN_free(x_sum); BN_CTX_free(ctx);
-	return NULL;
+	    BN_free(new_x); BN_free(new_y); BN_free(slope_xdiff);
+	    BN_free(slope_2); BN_free(slope); BN_free(new_xdiff); BN_free(x_sum); BN_CTX_free(ctx);
+	    return NULL;
     }
 
     result->x = new_x;
@@ -273,28 +309,34 @@ static point_t* point_addition(point_t *r, point_t *q, BIGNUM *bn_p, BIGNUM *bn_
 
 // the segfault inducer 
 static point_t *point_multiplication(point_t *r, BIGNUM *sec, BIGNUM *bn_p, BIGNUM *bn_a){
+
     // to multiply efficiently, do 2 * r, if most-sig bit is 1, add r, if not, add 0, save current result and continue
     int numbits = BN_num_bits(sec);
 
     point_t *result = point_new();
+
     // set the infinity to yes for now
     result->is_infinity = 1;
-    for (int i = numbits - 1; i >= 0; i --) {
-	// from serious crypto: point is multiplied by 2 on each step regardless
-	point_t *mult_2 = point_addition(result, result, bn_p, bn_a);
-        // free the current result and store it
-	if (mult_2 == NULL) {
-                fprintf(stderr, "Error in addition\n");
-                free_point(result); free_point(mult_2);
-		return NULL;
-        }
-	result = mult_2;
 
-	// now check if the extra step of adding P in is needed 
-	if (BN_is_bit_set(sec, i) == 1) {
+    for (int i = numbits - 1; i >= 0; i --) {
+
+	    // from serious crypto: point is multiplied by 2 on each step regardless
+	    point_t *mult_2 = point_addition(result, result, bn_p, bn_a);
+
+        // free the current result and store it
+	    if (mult_2 == NULL) {
+            fprintf(stderr, "Error in addition\n");
+            free_point(result); free_point(mult_2);
+		    return NULL;
+        }
+
+	    result = mult_2;
+
+	    // now check if the extra step of adding P in is needed 
+	    if (BN_is_bit_set(sec, i) == 1) {
             point_t *add_r = point_addition(result, r, bn_p, bn_a);
-	    result = add_r;
-    	}
+	        result = add_r;
+        }
     }
 
     return result;
@@ -322,46 +364,72 @@ int main() {
     BN_dec2bn(&bn_Gy, Gy);
     BN_dec2bn(&bn_n, n);
 
+    // print p
+    fprintf(stdout, "p: ");
 
     if (BN_print_fp(stdout, bn_p) == 0) {
         fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
+
     fprintf(stdout, "\n");
+
+    // print a
+    fprintf(stdout, "a: ");
+
     if (BN_print_fp(stdout, bn_a) == 0) {
         fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
+
     fprintf(stdout, "\n");
+
+    // print b
+    fprintf(stdout, "b: ");
 
     if (BN_print_fp(stdout, bn_b) == 0) {
         fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
+
     fprintf(stdout, "\n");
+
+    // print Gx
+    fprintf(stdout, "Gx: ");
 
     if (BN_print_fp(stdout, bn_Gx) == 0) {
         fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
+
     fprintf(stdout, "\n");
     
+    // print Gy
+    fprintf(stdout, "Gy: ");
+
     if (BN_print_fp(stdout, bn_Gy) == 0) {
         fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
+
     fprintf(stdout, "\n");
+
+    // print n
+    fprintf(stdout, "n: ");
 
     if (BN_print_fp(stdout, bn_n) == 0) {
         fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
+
     fprintf(stdout, "\n\n");
     
+    // create struct for initial point
     point_t *gx_gy = point_new();
-    if(gx_gy == NULL){
+
+    if (gx_gy == NULL){
     	fprintf(stderr, "Could not malloc for point\n");
-	return EXIT_FAILURE;
+	    return EXIT_FAILURE;
     }
     // store gx and gy as a point
     gx_gy->x = bn_Gx; gx_gy->y = bn_Gy;
@@ -374,14 +442,20 @@ int main() {
     
     if(BN_rand_range(a_sec, bn_n) == 0 || BN_rand_range(b_sec, bn_n) == 0){
         fprintf(stderr, "Could not generate rand\n");
-	return EXIT_FAILURE;
+	    return EXIT_FAILURE;
     }
+
+    // print a's secret
+    fprintf(stdout, "a's secret: ");
 
     if(BN_print_fp(stdout, a_sec) == 0){
     	fprintf(stderr, "Could not print out bignum\n");
         return EXIT_FAILURE;
     }
     fprintf(stdout, "\n");
+
+    // print b's secret
+    fprintf(stdout, "b's secret: ");
 
     if(BN_print_fp(stdout, b_sec) == 0){
         fprintf(stderr, "Could not print out bignum\n");
@@ -393,15 +467,13 @@ int main() {
     point_t *a_key = point_multiplication(gx_gy, a_sec, bn_p, bn_a);
     if(a_key == NULL){
     	fprintf(stderr, "Point multiplication did not work\n");
-	return EXIT_FAILURE;
-    
+	    return EXIT_FAILURE;    
     }
 
     point_t *b_key = point_multiplication(gx_gy, b_sec, bn_p, bn_a);
     if(b_key == NULL){
     	fprintf(stderr, "Point multiplication did not work\n");
-	return EXIT_FAILURE;
-    	
+	    return EXIT_FAILURE;  	
     }
     
     // calculate their shared secret, and then check that the calculations work 
@@ -410,6 +482,16 @@ int main() {
     	fprintf(stderr, "Point multiplication did not work\n");
         return EXIT_FAILURE;
     }
+
+    // print shared secret
+    fprintf(stdout, "Shared secret: ");
+
+    if(BN_print_fp(stdout, shared_sec->x) == 0){
+        fprintf(stderr, "Could not print out bignum\n");
+        return EXIT_FAILURE;
+    }
+
+    fprintf(stdout, "\n");
 
     // now check that bob's calculation of shared x equals what alice calculated for sec
     point_t *check = point_multiplication(a_key, b_sec, bn_p, bn_a);
@@ -424,35 +506,78 @@ int main() {
     }
 
     // key derivation
-    /*char *secret_in_hex = BN_bn2hex(shared_sec);
-
-    if (secret_in_hex == NULL) {
-        fprintf(stdout, "Could not generate secret in hex\n");
-        return EXIT_FAILURE;
-    }
-
-    int secret_in_hex_len = strlen(secret_in_hex);
-    unsigned char *key = malloc(sizeof(char) * 32);
-
-    int result_derivation = PKCS5_PBKDF2_HMAC_SHA1(secret_in_hex,
-                                                   secret_in_hex_len,
-                                                   NULL,
-                                                   0,
-                                                   1000,
-                                                   32,
-                                                   key);
-
-    int test_len = strlen(key);
-    if(test_len != 32){
-        fprintf(stderr, "Key length does not match desired length\n");
-        return EXIT_FAILURE;
-    }
-
-    fprintf(stdout, "\nThe generated key is %s\n", key);
+    long salt = 0;
+    unsigned char key[EVP_MAX_MD_SIZE];
     
+    if (hkdf(key, salt, shared_sec->x) == EXIT_FAILURE) {
+        fprintf(stderr, "Error deriving key\n");
+        return EXIT_FAILURE;
+    }
 
-    // now test this key with a symmetric encryption algorithm, like AES/DES for example
-    */
+    fprintf(stdout, "key: %s\n", key);
+
+    // AES encrypt
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new(); // null check?
+    EVP_CIPHER *cipher = EVP_CIPHER_fetch(NULL, "AES-256-CBC", NULL);
+    
+    // setting iv == NULL for right now
+    if (!EVP_EncryptInit_ex2(ctx, cipher, key, NULL, NULL)) {
+        fprintf(stdout, "Error initializing AES\n");
+        return EXIT_FAILURE;
+    }
+
+    // ask user for input
+    unsigned char *message = malloc(200);
+    if (message == NULL) {
+        fprintf(stderr, "Could not allocate space for message\n");
+        return EXIT_FAILURE;
+    }
+
+    if (fscanf(stdin, "%s", message) != 1) {
+        fprintf(stderr, "Error reading input\n");
+        return EXIT_FAILURE;
+    }
+
+    int plaintext_len = strlen((char *)message);
+    int *out_len = malloc(sizeof(int));
+    if (out_len == NULL) {
+        fprintf(stderr, "Could not allocate memory for out_len\n");
+        return EXIT_FAILURE;
+    }
+
+    unsigned char cipher_text[256];
+
+    if (!EVP_EncryptUpdate(ctx, cipher_text, out_len, message, plaintext_len)) {
+        fprintf(stdout, "Error encrypting\n");
+        return EXIT_FAILURE;
+    }
+
+    if (!EVP_EncryptFinal_ex(ctx, cipher_text, out_len)) {
+        fprintf(stdout, "Error finalizing encryption\n");
+        return EXIT_FAILURE;
+    }
+    
+    fprintf(stdout, "Ciphertext: %s\n", cipher_text);
+
+    // AES decrypt
+    if (!EVP_DecryptInit_ex2(ctx, cipher, key, NULL, NULL)) {
+        fprintf(stderr, "Error initializing decryption\n");
+        return EXIT_FAILURE;
+    }
+
+    unsigned char decrypted_text[256];
+
+    if (!EVP_DecryptUpdate(ctx, decrypted_text, out_len, cipher_text, *out_len)) {
+        fprintf(stderr, "Error decrypting\n");
+        return EXIT_FAILURE;
+    }
+
+    if (!EVP_DecryptFinal_ex(ctx, decrypted_text, out_len)) {
+        fprintf(stdout, "Error finalizing decryption\n");
+        return EXIT_FAILURE;
+    }
+
+    fprintf(stdout, "Decrypted Text: %s\n", decrypted_text);
 
     // free stuff
     BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_n);
