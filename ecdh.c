@@ -12,6 +12,7 @@
 #include <openssl/err.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 /*
  * Curve info:
@@ -80,11 +81,21 @@ int hkdf(unsigned char *key, long salt, BIGNUM *ikm) {
 
     if (!EVP_DigestInit_ex(ctx, EVP_sha256(), NULL)) {
         fprintf(stderr, "Error initializing hash\n");
+
+        // free before returning
+        EVP_MD_CTX_free(ctx);
+
         return EXIT_FAILURE;
     }
 
-    if (!EVP_DigestUpdate(ctx, ikm, sizeof(ikm))) {
+    int ikm_num_bytes = BN_num_bytes(ikm);
+
+    if (!EVP_DigestUpdate(ctx, ikm, ikm_num_bytes)) {
         fprintf(stderr, "Error hashing ikm\n");
+
+        // free before returning
+        EVP_MD_CTX_free(ctx);
+
         return EXIT_FAILURE;
     }
 
@@ -93,12 +104,25 @@ int hkdf(unsigned char *key, long salt, BIGNUM *ikm) {
 
     if (!EVP_DigestFinal_ex(ctx, hash, &hash_len)) {
         fprintf(stderr, "Error retreiving hash\n");
+        
+        // free before returning
+        EVP_MD_CTX_free(ctx);
+
         return EXIT_FAILURE;
     }
 
-    fprintf(stdout, "Hash: %s\n", hash);
+    //fprintf(stdout, "Hash: %s\n", hash);
+
+    fprintf(stdout, "Hash: ");
+    for (int i = 0; i < hash_len; i ++) {
+        fprintf(stdout, "%02x", hash[i]);
+    }
+    fprintf(stdout, "\n");
 
     memcpy(key, hash, hash_len);
+
+    // free before returning
+    EVP_MD_CTX_free(ctx);
 
     return EXIT_SUCCESS;
 }
@@ -502,7 +526,7 @@ int main() {
 
 
     if(BN_cmp(shared_sec->x, check->x) == 0 && BN_cmp(shared_sec->y, check->y) == 0){
-        fprintf(stdout, "Yayayayaya we won BIG(num)!\n");
+        fprintf(stdout, "Shared secrets are the same!\n");
     }
 
     FILE* fp = fopen("key.txt", "w");
@@ -520,10 +544,12 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    fprintf(fp, "%s", key);
-    fclose(fp);
+    // free openssl variables
     BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_n);
     BN_free(a_sec); BN_free(b_sec); free_point(check); free_point(b_key); free_point(a_key); free_point(shared_sec);
+
+    fprintf(fp, "%s", key);
+    fclose(fp);
     
     return EXIT_SUCCESS;
     
