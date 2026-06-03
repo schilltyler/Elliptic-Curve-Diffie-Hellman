@@ -505,6 +505,12 @@ int main() {
         fprintf(stdout, "Yayayayaya we won BIG(num)!\n");
     }
 
+    FILE* fp = fopen("key.txt", "w");
+    if (fp == NULL) {
+    	fprintf(stderr, "Error opening file for writing\n");
+	return EXIT_FAILURE;
+    }
+
     // key derivation
     long salt = 0;
     unsigned char key[EVP_MAX_MD_SIZE];
@@ -514,75 +520,12 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    fprintf(stdout, "key: %s\n", key);
-
-    // AES encrypt
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new(); // null check?
-    EVP_CIPHER *cipher = EVP_CIPHER_fetch(NULL, "AES-256-CBC", NULL);
-    
-    // setting iv == NULL for right now
-    if (!EVP_EncryptInit_ex2(ctx, cipher, key, NULL, NULL)) {
-        fprintf(stdout, "Error initializing AES\n");
-        return EXIT_FAILURE;
-    }
-
-    // ask user for input
-    unsigned char *message = malloc(200);
-    if (message == NULL) {
-        fprintf(stderr, "Could not allocate space for message\n");
-        return EXIT_FAILURE;
-    }
-
-    if (fscanf(stdin, "%s", message) != 1) {
-        fprintf(stderr, "Error reading input\n");
-        return EXIT_FAILURE;
-    }
-
-    int plaintext_len = strlen((char *)message);
-    int *out_len = malloc(sizeof(int));
-    if (out_len == NULL) {
-        fprintf(stderr, "Could not allocate memory for out_len\n");
-        return EXIT_FAILURE;
-    }
-
-    unsigned char cipher_text[256];
-
-    if (!EVP_EncryptUpdate(ctx, cipher_text, out_len, message, plaintext_len)) {
-        fprintf(stdout, "Error encrypting\n");
-        return EXIT_FAILURE;
-    }
-
-    if (!EVP_EncryptFinal_ex(ctx, cipher_text, out_len)) {
-        fprintf(stdout, "Error finalizing encryption\n");
-        return EXIT_FAILURE;
-    }
-    
-    fprintf(stdout, "Ciphertext: %s\n", cipher_text);
-
-    // AES decrypt
-    if (!EVP_DecryptInit_ex2(ctx, cipher, key, NULL, NULL)) {
-        fprintf(stderr, "Error initializing decryption\n");
-        return EXIT_FAILURE;
-    }
-
-    unsigned char decrypted_text[256];
-
-    if (!EVP_DecryptUpdate(ctx, decrypted_text, out_len, cipher_text, *out_len)) {
-        fprintf(stderr, "Error decrypting\n");
-        return EXIT_FAILURE;
-    }
-
-    if (!EVP_DecryptFinal_ex(ctx, decrypted_text, out_len)) {
-        fprintf(stdout, "Error finalizing decryption\n");
-        return EXIT_FAILURE;
-    }
-
-    fprintf(stdout, "Decrypted Text: %s\n", decrypted_text);
-
-    // free stuff
+    fprintf(fp, "%s", key);
+    fclose(fp);
     BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_n);
-    BN_free(a_sec); BN_free(b_sec); free_point(check); free_point(b_key); free_point(a_key); free_point(shared_sec); 
-
+    BN_free(a_sec); BN_free(b_sec); free_point(check); free_point(b_key); free_point(a_key); free_point(shared_sec);
+    
     return EXIT_SUCCESS;
+    
 }
 

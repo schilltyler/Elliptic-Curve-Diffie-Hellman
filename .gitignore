@@ -1,2 +1,4 @@
 *.o
 ecdh
+test_key
+key.txt
