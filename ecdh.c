@@ -529,6 +529,12 @@ int main() {
         fprintf(stdout, "Shared secrets are the same!\n");
     }
 
+    FILE* fp = fopen("key.txt", "w");
+    if (fp == NULL) {
+    	fprintf(stderr, "Error opening file for writing\n");
+	return EXIT_FAILURE;
+    }
+
     // key derivation
     long salt = 0;
     unsigned char key[EVP_MAX_MD_SIZE];
@@ -538,97 +544,14 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    fprintf(stdout, "Key: ");
-    for (int i = 0; i < 32; i ++) {
-        fprintf(stdout, "%02x", key[i]);
-    }
-    fprintf(stdout, "\n");
-
-    // AES encrypt
-    EVP_CIPHER_CTX *e_ctx = EVP_CIPHER_CTX_new(); // null check?
-    EVP_CIPHER *cipher = EVP_CIPHER_fetch(NULL, "AES-256-CBC", NULL);
-    unsigned char iv[16];
-
-    if (!RAND_bytes(iv, sizeof(iv))) {
-        fprintf(stderr, "Error generating IV\n");
-        return EXIT_FAILURE;
-    }
-    
-    // setting iv == NULL for right now
-    if (!EVP_EncryptInit_ex2(e_ctx, cipher, key, iv, NULL)) {
-        fprintf(stdout, "Error initializing AES\n");
-        return EXIT_FAILURE;
-    }
-
-    // ask user for input
-    unsigned char *message = malloc(200);
-    if (message == NULL) {
-        fprintf(stderr, "Could not allocate space for message\n");
-        return EXIT_FAILURE;
-    }
-
-    if (!fgets((char *)message, 200, stdin)) {
-        fprintf(stderr, "Error reading input\n");
-        return EXIT_FAILURE;
-    }
-
-    //fprintf(stdout, "Message: %s\n", message);
-
-    int plaintext_len = strlen((char *)message);
-    //fprintf(stdout, "plaintext len: %d\n", plaintext_len);
-    unsigned char cipher_text[256];
-    int e_out_len1;
-    int e_out_len2;
-
-    if (!EVP_EncryptUpdate(e_ctx, cipher_text, &e_out_len1, message, plaintext_len)) {
-        fprintf(stdout, "Error encrypting\n");
-        return EXIT_FAILURE;
-    }
-
-    if (!EVP_EncryptFinal_ex(e_ctx, cipher_text + e_out_len1, &e_out_len2)) {
-        fprintf(stdout, "Error finalizing encryption\n");
-        return EXIT_FAILURE;
-    }
-    
-    fprintf(stdout, "Ciphertext: ");
-    for (int i = 0; i < e_out_len1 + e_out_len2; i ++) {
-        fprintf(stdout, "%02x", cipher_text[i]);
-    }
-    fprintf(stdout, "\n");
-
-    // AES decrypt
-    
-    // create new context
-    EVP_CIPHER_CTX *d_ctx = EVP_CIPHER_CTX_new(); // null check?
-
-    if (!EVP_DecryptInit_ex2(d_ctx, cipher, key, iv, NULL)) {
-        fprintf(stderr, "Error initializing decryption\n");
-        return EXIT_FAILURE;
-    }
-
-    unsigned char decrypted_text[256];
-    int d_out_len1;
-    int d_out_len2;
-    int ciphertext_len = e_out_len1 + e_out_len2;
-
-    if (!EVP_DecryptUpdate(d_ctx, decrypted_text, &d_out_len1, cipher_text, ciphertext_len)) {
-        fprintf(stderr, "Error decrypting\n");
-        return EXIT_FAILURE;
-    }
-
-    if (!EVP_DecryptFinal_ex(d_ctx, decrypted_text + d_out_len1, &d_out_len2)) {
-        fprintf(stdout, "Error finalizing decryption\n");
-        return EXIT_FAILURE;
-    }
-
-    decrypted_text[d_out_len1 + d_out_len2] = '\0';
-
-    fprintf(stdout, "Decrypted Text: %s\n", decrypted_text);
-
     // free openssl variables
     BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_n);
-    BN_free(a_sec); BN_free(b_sec); free_point(check); free_point(b_key); free_point(a_key); free_point(shared_sec); EVP_CIPHER_free(cipher); EVP_CIPHER_CTX_free(e_ctx); EVP_CIPHER_CTX_free(d_ctx);
+    BN_free(a_sec); BN_free(b_sec); free_point(check); free_point(b_key); free_point(a_key); free_point(shared_sec);
 
+    fprintf(fp, "%s", key);
+    fclose(fp);
+    
     return EXIT_SUCCESS;
+    
 }
 
