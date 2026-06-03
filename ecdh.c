@@ -12,6 +12,7 @@
 #include <openssl/err.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 /*
  * Curve info:
@@ -80,11 +81,21 @@ int hkdf(unsigned char *key, long salt, BIGNUM *ikm) {
 
     if (!EVP_DigestInit_ex(ctx, EVP_sha256(), NULL)) {
         fprintf(stderr, "Error initializing hash\n");
+
+        // free before returning
+        EVP_MD_CTX_free(ctx);
+
         return EXIT_FAILURE;
     }
 
-    if (!EVP_DigestUpdate(ctx, ikm, sizeof(ikm))) {
+    int ikm_num_bytes = BN_num_bytes(ikm);
+
+    if (!EVP_DigestUpdate(ctx, ikm, ikm_num_bytes)) {
         fprintf(stderr, "Error hashing ikm\n");
+
+        // free before returning
+        EVP_MD_CTX_free(ctx);
+
         return EXIT_FAILURE;
     }
 
@@ -93,12 +104,25 @@ int hkdf(unsigned char *key, long salt, BIGNUM *ikm) {
 
     if (!EVP_DigestFinal_ex(ctx, hash, &hash_len)) {
         fprintf(stderr, "Error retreiving hash\n");
+        
+        // free before returning
+        EVP_MD_CTX_free(ctx);
+
         return EXIT_FAILURE;
     }
 
-    fprintf(stdout, "Hash: %s\n", hash);
+    //fprintf(stdout, "Hash: %s\n", hash);
+
+    fprintf(stdout, "Hash: ");
+    for (int i = 0; i < hash_len; i ++) {
+        fprintf(stdout, "%02x", hash[i]);
+    }
+    fprintf(stdout, "\n");
 
     memcpy(key, hash, hash_len);
+
+    // free before returning
+    EVP_MD_CTX_free(ctx);
 
     return EXIT_SUCCESS;
 }
@@ -502,7 +526,7 @@ int main() {
 
 
     if(BN_cmp(shared_sec->x, check->x) == 0 && BN_cmp(shared_sec->y, check->y) == 0){
-        fprintf(stdout, "Yayayayaya we won BIG(num)!\n");
+        fprintf(stdout, "Shared secrets are the same!\n");
     }
 
     // key derivation
@@ -514,14 +538,24 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    fprintf(stdout, "key: %s\n", key);
+    fprintf(stdout, "Key: ");
+    for (int i = 0; i < 32; i ++) {
+        fprintf(stdout, "%02x", key[i]);
+    }
+    fprintf(stdout, "\n");
 
     // AES encrypt
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new(); // null check?
+    EVP_CIPHER_CTX *e_ctx = EVP_CIPHER_CTX_new(); // null check?
     EVP_CIPHER *cipher = EVP_CIPHER_fetch(NULL, "AES-256-CBC", NULL);
+    unsigned char iv[16];
+
+    if (!RAND_bytes(iv, sizeof(iv))) {
+        fprintf(stderr, "Error generating IV\n");
+        return EXIT_FAILURE;
+    }
     
     // setting iv == NULL for right now
-    if (!EVP_EncryptInit_ex2(ctx, cipher, key, NULL, NULL)) {
+    if (!EVP_EncryptInit_ex2(e_ctx, cipher, key, iv, NULL)) {
         fprintf(stdout, "Error initializing AES\n");
         return EXIT_FAILURE;
     }
@@ -533,55 +567,67 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    if (fscanf(stdin, "%s", message) != 1) {
+    if (!fgets((char *)message, 200, stdin)) {
         fprintf(stderr, "Error reading input\n");
         return EXIT_FAILURE;
     }
 
+    //fprintf(stdout, "Message: %s\n", message);
+
     int plaintext_len = strlen((char *)message);
-    int *out_len = malloc(sizeof(int));
-    if (out_len == NULL) {
-        fprintf(stderr, "Could not allocate memory for out_len\n");
-        return EXIT_FAILURE;
-    }
-
+    //fprintf(stdout, "plaintext len: %d\n", plaintext_len);
     unsigned char cipher_text[256];
+    int e_out_len1;
+    int e_out_len2;
 
-    if (!EVP_EncryptUpdate(ctx, cipher_text, out_len, message, plaintext_len)) {
+    if (!EVP_EncryptUpdate(e_ctx, cipher_text, &e_out_len1, message, plaintext_len)) {
         fprintf(stdout, "Error encrypting\n");
         return EXIT_FAILURE;
     }
 
-    if (!EVP_EncryptFinal_ex(ctx, cipher_text, out_len)) {
+    if (!EVP_EncryptFinal_ex(e_ctx, cipher_text + e_out_len1, &e_out_len2)) {
         fprintf(stdout, "Error finalizing encryption\n");
         return EXIT_FAILURE;
     }
     
-    fprintf(stdout, "Ciphertext: %s\n", cipher_text);
+    fprintf(stdout, "Ciphertext: ");
+    for (int i = 0; i < e_out_len1 + e_out_len2; i ++) {
+        fprintf(stdout, "%02x", cipher_text[i]);
+    }
+    fprintf(stdout, "\n");
 
     // AES decrypt
-    if (!EVP_DecryptInit_ex2(ctx, cipher, key, NULL, NULL)) {
+    
+    // create new context
+    EVP_CIPHER_CTX *d_ctx = EVP_CIPHER_CTX_new(); // null check?
+
+    if (!EVP_DecryptInit_ex2(d_ctx, cipher, key, iv, NULL)) {
         fprintf(stderr, "Error initializing decryption\n");
         return EXIT_FAILURE;
     }
 
     unsigned char decrypted_text[256];
+    int d_out_len1;
+    int d_out_len2;
+    int ciphertext_len = e_out_len1 + e_out_len2;
 
-    if (!EVP_DecryptUpdate(ctx, decrypted_text, out_len, cipher_text, *out_len)) {
+    if (!EVP_DecryptUpdate(d_ctx, decrypted_text, &d_out_len1, cipher_text, ciphertext_len)) {
         fprintf(stderr, "Error decrypting\n");
         return EXIT_FAILURE;
     }
 
-    if (!EVP_DecryptFinal_ex(ctx, decrypted_text, out_len)) {
+    if (!EVP_DecryptFinal_ex(d_ctx, decrypted_text + d_out_len1, &d_out_len2)) {
         fprintf(stdout, "Error finalizing decryption\n");
         return EXIT_FAILURE;
     }
 
+    decrypted_text[d_out_len1 + d_out_len2] = '\0';
+
     fprintf(stdout, "Decrypted Text: %s\n", decrypted_text);
 
-    // free stuff
+    // free openssl variables
     BN_free(bn_p); BN_free(bn_a); BN_free(bn_b); BN_free(bn_n);
-    BN_free(a_sec); BN_free(b_sec); free_point(check); free_point(b_key); free_point(a_key); free_point(shared_sec); 
+    BN_free(a_sec); BN_free(b_sec); free_point(check); free_point(b_key); free_point(a_key); free_point(shared_sec); EVP_CIPHER_free(cipher); EVP_CIPHER_CTX_free(e_ctx); EVP_CIPHER_CTX_free(d_ctx);
 
     return EXIT_SUCCESS;
 }
